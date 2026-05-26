@@ -1,0 +1,28 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Playfair+Display:ital,wght@0,400;0,600;1,400&display=swap');
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Playfair Display", ui-serif, Georgia, serif;
+  
+  --color-brand-primary: #050704; /* True Black Forest */
+  --color-brand-sage: #1F281B; /* Even deeper sage */
+  --color-brand-accent: #1F281B;
+  --color-brand-bg: #EBEBE4; /* Slightly deeper background to make white fields pop */
+  --color-brand-border: #A3A899; /* Much more visible border */
+  --color-brand-soft: #B0B8A8; /* Darker soft green */
+}
+
+@layer base {
+  html {
+    scroll-behavior: smooth;
+  }
+  
+  body {
+    @apply bg-brand-bg text-brand-primary font-sans antialiased;
+  }
+  
+  h1, h2, h3, h4 {
+    @apply font-serif;
+  }
+}

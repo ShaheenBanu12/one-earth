@@ -1,0 +1,74 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isSignedIn() { return request.auth != null; }
+    function isAdmin() { return isSignedIn() && request.auth.token.email == 'e0324100@sriher.edu.in'; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+
+    // Validation for Inquiry
+    function isValidInquiry(data) {
+      return data.businessName is string && data.businessName.size() <= 200 &&
+             data.email is string && data.email.size() <= 100 &&
+             (!('phone' in data) || data.phone is string && data.phone.size() <= 50) &&
+             data.subject is string && data.subject.size() <= 100 &&
+             data.message is string && data.message.size() <= 2000 &&
+             data.status in ['pending', 'contacted', 'closed'] &&
+             data.createdAt == request.time &&
+             (!('userId' in data) || data.userId == null || data.userId is string);
+    }
+
+    // Validation for UserProfile
+    function isValidUserProfile(data) {
+      return data.email is string && data.email.size() <= 100 &&
+             data.createdAt == request.time;
+    }
+
+    function isValidBusySlot(data) {
+      return data.date is string && data.date.size() <= 20 &&
+             data.time is string && data.time.size() <= 20 &&
+             data.createdAt == request.time &&
+             (!('userId' in data) || data.userId == null || data.userId is string) &&
+             (!('inquiryId' in data) || data.inquiryId == null || data.inquiryId is string);
+    }
+
+    function isValidHoliday(data) {
+      return data.date is string && data.date.size() <= 20 &&
+             data.createdBy is string &&
+             data.createdAt == request.time &&
+             (!('reason' in data) || data.reason is string && data.reason.size() <= 500);
+    }
+
+    match /inquiries/{inquiryId} {
+      allow create: if isValidInquiry(incoming());
+      allow read, list: if true;
+    }
+
+    match /busy_slots/{slotId} {
+      allow read, list: if true;
+      allow create: if isValidBusySlot(incoming());
+      allow delete: if true;
+    }
+
+    match /holidays/{holidayId} {
+      allow read, list: if true;
+      allow write: if isValidHoliday(incoming());
+      allow delete: if true;
+    }
+
+    match /users/{userId} {
+      allow get: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidUserProfile(incoming());
+      allow update: if isOwner(userId) && isValidUserProfile(incoming()) && 
+                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL']);
+    }
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "entities": {
+    "Inquiry": {
+      "title": "Inquiry",
+      "description": "A contact form submission or starter pack request.",
+      "type": "object",
+      "properties": {
+        "businessName": { "type": "string", "description": "Legal or trading name of the SME" },
+        "email": { "type": "string", "format": "email", "description": "Contact email of the sender" },
+        "phone": { "type": "string", "description": "Phone number for follow-up" },
+        "subject": { "type": "string", "description": "Type of inquiry (e.g. Starter Pack, Consultation)" },
+        "message": { "type": "string", "description": "Detailed request message" },
+        "status": { "type": "string", "enum": ["pending", "contacted", "closed"], "description": "Internal status of the inquiry" },
+        "userId": { "type": "string", "description": "Auth UID if the user was logged in" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["businessName", "email", "subject", "message", "status", "createdAt"]
+    },
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Basic user data stored after login.",
+      "type": "object",
+      "properties": {
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "createdAt"]
+    },
+    "BusySlot": {
+      "title": "Busy Slot",
+      "description": "Represents a booked time slot on a specific date.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "description": "ISO date string (YYYY-MM-DD)" },
+        "time": { "type": "string", "description": "Time string (e.g. 09:00 AM)" },
+        "userId": { "type": "string", "description": "UID of the user who booked it" },
+        "inquiryId": { "type": "string", "description": "Reference to the inquiry document" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["date", "time", "createdAt"]
+    },
+    "Holiday": {
+      "title": "Holiday",
+      "description": "A date blocked off by the developer/admin.",
+      "type": "object",
+      "properties": {
+        "date": { "type": "string", "description": "ISO date string (YYYY-MM-DD)" },
+        "reason": { "type": "string", "description": "Reason for the leave (optional)" },
+        "createdBy": { "type": "string", "description": "UID of the admin" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["date", "createdBy", "createdAt"]
+    }
+  },
+  "firestore": {
+    "inquiries/{inquiryId}": {
+      "schema": "Inquiry",
+      "description": "Public inquiries submitted via the website contact form."
+    },
+    "busy_slots/{slotId}": {
+      "schema": "BusySlot",
+      "description": "Slots that are already booked and cannot be selected by others."
+    },
+    "holidays/{holidayId}": {
+      "schema": "Holiday",
+      "description": "Dates where the business is closed."
+    },
+    "users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile data accessible only by the owner."
+    }
+  }
+}
