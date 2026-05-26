@@ -92,28 +92,24 @@ async function startServer() {
     }
   };
 
-  // API Route for sending emails
-  app.post("/api/send-email", inquiryLimiter, async (req, res) => {
-    const { business_name, user_email, phone, subject, message, to_email, website_verify, eventDate, eventTime, eventService } = req.body;
+  // Create and pool transporter once
+  let transporterInstance: any = null;
+  const getTransporter = () => {
+    if (transporterInstance) return transporterInstance;
 
-    // Honeypot check: If the hidden field is filled, it's likely a bot
-    if (website_verify) {
-      console.warn("Honeypot triggered. Blocking request.");
-      return res.status(200).json({ success: true, note: "Bot detected" }); // Pretend it worked
-    }
-
-    // Check if variables are set
     const host = process.env.SMTP_HOST;
     const port = parseInt(process.env.SMTP_PORT || "587");
     const user = process.env.SMTP_USER || process.env.SMTP_USERNAME;
     const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
 
     if (!user || !pass) {
-      console.error("SMTP credentials missing in environment variables. Expected SMTP_USER/SMTP_USERNAME and SMTP_PASS/SMTP_PASSWORD.");
-      return res.status(500).json({ error: "Server configuration error: SMTP credentials missing" });
+      return null;
     }
 
-    const transporter = nodemailer.createTransport({
+    transporterInstance = nodemailer.createTransport({
+      pool: true, // Enable TCP/SMTP connection pooling to reuse active connections
+      maxConnections: 5,
+      maxMessages: 100,
       host,
       port,
       secure: port === 465, // true for 465, false for other ports
@@ -125,6 +121,27 @@ async function startServer() {
         rejectUnauthorized: false // Often needed for STARTTLS on port 587 in some environments
       }
     });
+
+    return transporterInstance;
+  };
+
+  // API Route for sending emails
+  app.post("/api/send-email", inquiryLimiter, async (req, res) => {
+    const { business_name, user_email, phone, subject, message, to_email, website_verify, eventDate, eventTime, eventService } = req.body;
+
+    // Honeypot check: If the hidden field is filled, it's likely a bot
+    if (website_verify) {
+      console.warn("Honeypot triggered. Blocking request.");
+      return res.status(200).json({ success: true, note: "Bot detected" }); // Pretend it worked
+    }
+
+    const transporter = getTransporter();
+    const user = process.env.SMTP_USER || process.env.SMTP_USERNAME;
+
+    if (!transporter || !user) {
+      console.error("SMTP credentials missing in environment variables. Expected SMTP_USER/SMTP_USERNAME and SMTP_PASS/SMTP_PASSWORD.");
+      return res.status(500).json({ error: "Server configuration error: SMTP credentials missing" });
+    }
 
     // Generate Calendar link if relevant details are provided
     let calendarLinkHtml = "";
@@ -146,8 +163,8 @@ async function startServer() {
     }
 
     try {
-      // 1. Send inquiry to One Earth admin
-      await transporter.sendMail({
+      // 1. Send inquiry to One Earth admin (Awaited to confirm receipt)
+      const adminMailPromise = transporter.sendMail({
         from: `"${business_name}" <${user}>`, // Use the authorized account as sender
         to: to_email || user,
         replyTo: user_email,
@@ -165,35 +182,36 @@ async function startServer() {
         `,
       });
 
-      // 2. Send automated receipt/acknowledgment to the customer
-      try {
-        await transporter.sendMail({
-          from: `"One Earth Limited" <${user}>`,
-          to: user_email,
-          subject: "We've received your inquiry - One Earth Limited",
-          text: `Thank you for reaching out!\n\nHi ${business_name},\n\nWe've received your inquiry regarding "${subject}" and our team is currently reviewing your message.\n\nWe aim to get back to you within 24 hours.\n\n"Because we all share one planet — and every action counts."\n\nBest regards,\nThe One Earth Team\n${calendarLinkText}`,
-          html: `
-            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e5e7eb; border-radius: 20px;">
-              <h2 style="color: #2d3436; font-size: 24px; font-weight: bold; margin-bottom: 20px; font-family: sans-serif;">Thank you for reaching out!</h2>
-              <p style="font-size: 15px; color: #2d3436;">Hi ${business_name},</p>
-              <p style="font-size: 15px; color: #333333; line-height: 1.5; margin-bottom: 20px;">We've received your inquiry regarding <strong>"${subject}"</strong> and our team is currently reviewing your message.</p>
-              <p style="font-size: 15px; font-weight: bold; color: #2d3436; margin: 20px 0;">We aim to get back to you within 24 hours.</p>
-              
-              ${calendarLinkHtml}
-              
-              <div style="margin: 30px 0; padding: 20px; background-color: #f9fafb; border-radius: 12px; border-left: 4px solid #788c78;">
-                <p style="margin: 0; font-style: italic; color: #4b5563; font-size: 14px;">"Because we all share one planet — and every action counts."</p>
-              </div>
-              
-              <p style="font-size: 15px; color: #333333; line-height: 1.5; margin: 0;">Best regards,<br><strong>The One Earth Team</strong></p>
-              <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 25px 0 20px 0;">
-              <p style="font-size: 12px; color: #9ca3af; margin: 0;">One Earth Limited | Derby, United Kingdom</p>
+      // 2. Send automated receipt/acknowledgment to the customer (Dispatched asynchronously in the background)
+      transporter.sendMail({
+        from: `"One Earth Limited" <${user}>`,
+        to: user_email,
+        subject: "We've received your inquiry - One Earth Limited",
+        text: `Thank you for reaching out!\n\nHi ${business_name},\n\nWe've received your inquiry regarding "${subject}" and our team is currently reviewing your message.\n\nWe aim to get back to you within 24 hours.\n\n"Because we all share one planet — and every action counts."\n\nBest regards,\nThe One Earth Team\n${calendarLinkText}`,
+        html: `
+          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e5e7eb; border-radius: 20px;">
+            <h2 style="color: #2d3436; font-size: 24px; font-weight: bold; margin-bottom: 20px; font-family: sans-serif;">Thank you for reaching out!</h2>
+            <p style="font-size: 15px; color: #2d3436;">Hi ${business_name},</p>
+            <p style="font-size: 15px; color: #333333; line-height: 1.5; margin-bottom: 20px;">We've received your inquiry regarding <strong>"${subject}"</strong> and our team is currently reviewing your message.</p>
+            <p style="font-size: 15px; font-weight: bold; color: #2d3436; margin: 20px 0;">We aim to get back to you within 24 hours.</p>
+            
+            ${calendarLinkHtml}
+            
+            <div style="margin: 30px 0; padding: 20px; background-color: #f9fafb; border-radius: 12px; border-left: 4px solid #788c78;">
+              <p style="margin: 0; font-style: italic; color: #4b5563; font-size: 14px;">"Because we all share one planet — and every action counts."</p>
             </div>
-          `,
-        });
-      } catch (autoReplyErr) {
-        console.error("Auto-reply failed to send (but primary inquiry succeeded):", autoReplyErr);
-      }
+            
+            <p style="font-size: 15px; color: #333333; line-height: 1.5; margin: 0;">Best regards,<br><strong>The One Earth Team</strong></p>
+            <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 25px 0 20px 0;">
+            <p style="font-size: 12px; color: #9ca3af; margin: 0;">One Earth Limited | Derby, United Kingdom</p>
+          </div>
+        `,
+      }).catch((autoReplyErr: any) => {
+        console.error("Auto-reply background send failed (handled):", autoReplyErr);
+      });
+
+      // Wait for primary inquiry transfer to complete
+      await adminMailPromise;
 
       res.status(200).json({ success: true });
     } catch (error) {
