@@ -29,7 +29,7 @@ const inquiryLimiter = rateLimit({
 async function startServer() {
   const app = express();
   app.set("trust proxy", 1); // Trust first-hop proxy for client IP detection
-  const PORT = process.env.PORT || 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.use(express.json());
 
