@@ -163,8 +163,8 @@ async function startServer() {
     }
 
     try {
-      // 1. Send inquiry to One Earth admin (Awaited to confirm receipt)
-      const adminMailPromise = transporter.sendMail({
+      // 1. Send inquiry to One Earth admin (asynchronous background send)
+      transporter.sendMail({
         from: `"${business_name}" <${user}>`, // Use the authorized account as sender
         to: to_email || user,
         replyTo: user_email,
@@ -180,6 +180,8 @@ async function startServer() {
           <p>${message.replace(/\n/g, '<br>')}</p>
           ${calendarLinkHtml ? `<hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 25px 0;"> ${calendarLinkHtml}` : ""}
         `,
+      }).catch((adminMailErr: any) => {
+        console.error("Admin inquiry background send failed (handled):", adminMailErr);
       });
 
       // 2. Send automated receipt/acknowledgment to the customer (Dispatched asynchronously in the background)
@@ -210,12 +212,10 @@ async function startServer() {
         console.error("Auto-reply background send failed (handled):", autoReplyErr);
       });
 
-      // Wait for primary inquiry transfer to complete
-      await adminMailPromise;
-
+      // Immediately return HTTP 200 without waiting for the slow SMTP round-trips
       res.status(200).json({ success: true });
     } catch (error) {
-      console.error("Error sending email:", error);
+      console.error("Error setting up background email dispatch:", error);
       res.status(500).json({ error: "Failed to send email" });
     }
   });
