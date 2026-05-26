@@ -906,7 +906,7 @@ export default function App() {
             phone: formData.phone,
             subject: currentSubject,
             message: formData.message,
-            to_email: "info@oneearth.eco",
+            to_email: "info@oneearth.co",
             website_verify: formData.website_verify,
             eventDate: eventDate,
             eventTime: eventTime,
@@ -1424,7 +1424,7 @@ export default function App() {
                     </div>
                     <div>
                       <p className="text-[9px] uppercase tracking-widest font-bold opacity-40 mb-1">Email</p>
-                      <a href="mailto:info@oneearth.eco" className="text-sm font-medium hover:text-brand-sage transition-colors">info@oneearth.eco</a>
+                      <a href="mailto:info@oneearth.co" className="text-sm font-medium hover:text-brand-sage transition-colors">info@oneearth.co</a>
                     </div>
                   </div>
                   <div className="flex flex-col items-center text-center gap-3 group">
