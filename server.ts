@@ -220,6 +220,50 @@ async function startServer() {
     }
   });
 
+  // SMTP Connection Diagnostic Endpoint
+  app.get("/api/test-email-config", async (req, res) => {
+    const host = process.env.SMTP_HOST;
+    const port = parseInt(process.env.SMTP_PORT || "587");
+    const user = process.env.SMTP_USER || process.env.SMTP_USERNAME;
+    const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
+
+    if (!user || !pass) {
+      return res.status(400).json({
+        success: false,
+        error: "SMTP credentials missing in environment variables. Please check your SMTP_USER and SMTP_PASS/SMTP_PASSWORD in the app Settings.",
+        config: { host, port, user, hasPassword: !!pass }
+      });
+    }
+
+    try {
+      // Create a fresh test transporter with connection timeout
+      const testTransporter = nodemailer.createTransport({
+        host,
+        port,
+        secure: port === 465,
+        auth: { user, pass },
+        tls: { rejectUnauthorized: false },
+        connectionTimeout: 10000 // 10 second timeout
+      });
+
+      await testTransporter.verify();
+      return res.status(200).json({
+        success: true,
+        message: "SMTP connection verified successfully! Your credentials and network configuration are working.",
+        config: { host, port, user, hasPassword: true }
+      });
+    } catch (err: any) {
+      console.error("Test SMTP Connection failed:", err);
+      return res.status(500).json({
+        success: false,
+        error: err.message || "Unknown SMTP verification error",
+        code: err.code || "N/A",
+        command: err.command || "N/A",
+        config: { host, port, user, hasPassword: true }
+      });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
