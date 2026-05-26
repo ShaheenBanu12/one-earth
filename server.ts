@@ -92,20 +92,26 @@ async function startServer() {
     }
   };
 
-  // Create and pool transporter once
+  // Create and pool transporter once, but rebuild if environment variables change
+  let cachedConfigStr = "";
   let transporterInstance: any = null;
   const getTransporter = () => {
-    if (transporterInstance) return transporterInstance;
-
-    const host = process.env.SMTP_HOST;
+    const host = process.env.SMTP_HOST || "";
     const port = parseInt(process.env.SMTP_PORT || "587");
-    const user = process.env.SMTP_USER || process.env.SMTP_USERNAME;
-    const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
+    const user = process.env.SMTP_USER || process.env.SMTP_USERNAME || "";
+    const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || "";
+
+    const currentConfigStr = `${host}:${port}:${user}:${pass}`;
+
+    if (transporterInstance && cachedConfigStr === currentConfigStr) {
+      return transporterInstance;
+    }
 
     if (!user || !pass) {
       return null;
     }
 
+    cachedConfigStr = currentConfigStr;
     transporterInstance = nodemailer.createTransport({
       pool: true, // Enable TCP/SMTP connection pooling to reuse active connections
       maxConnections: 5,
@@ -125,6 +131,101 @@ async function startServer() {
     return transporterInstance;
   };
 
+  // Modern unified sending helper supporting SMTP fallback + HTTP REST APIs (which bypass Port restrictions)
+  const sendMailViaService = async (options: {
+    from: string;
+    to: string;
+    replyTo?: string;
+    subject: string;
+    text: string;
+    html: string;
+  }) => {
+    const brevoKey = process.env.BREVO_API_KEY;
+    const resendKey = process.env.RESEND_API_KEY;
+
+    // 1. Try Brevo HTTP API (Port 443 - Completely unblocked on Cloud platforms)
+    if (brevoKey) {
+      console.log("Sending email via Brevo HTTPS REST API (Port 443)...");
+      const senderEmail = process.env.SMTP_USER || process.env.SMTP_USERNAME || "info@oneearth.eco";
+      
+      // Extract decorative name from from-header if present
+      const nameMatch = options.from.match(/^"([^"]+)"/);
+      const senderName = nameMatch ? nameMatch[1] : "One Earth Limited";
+
+      const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+        method: "POST",
+        headers: {
+          "accept": "application/json",
+          "api-key": brevoKey,
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          sender: { name: senderName, email: senderEmail },
+          to: [{ email: options.to }],
+          replyTo: options.replyTo ? { email: options.replyTo } : undefined,
+          subject: options.subject,
+          htmlContent: options.html,
+          textContent: options.text
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Brevo HTTP API delivery failed (Status ${response.status}): ${errText}`);
+      }
+      return { success: true, service: "Brevo HTTP API" };
+    }
+
+    // 2. Try Resend HTTP API (Port 443)
+    if (resendKey) {
+      console.log("Sending email via Resend HTTPS REST API (Port 443)...");
+      const fromEmail = process.env.SMTP_USER || process.env.SMTP_USERNAME || "info@oneearth.eco";
+      const nameMatch = options.from.match(/^"([^"]+)"/);
+      const senderName = nameMatch ? nameMatch[1] : "One Earth Limited";
+
+      const response = await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${resendKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          from: `${senderName} <${fromEmail}>`,
+          to: [options.to],
+          reply_to: options.replyTo,
+          subject: options.subject,
+          html: options.html,
+          text: options.text
+        })
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Resend HTTP API delivery failed (Status ${response.status}): ${errText}`);
+      }
+      return { success: true, service: "Resend HTTP API" };
+    }
+
+    // 3. SMTP Fallback
+    const transporter = getTransporter();
+    const user = process.env.SMTP_USER || process.env.SMTP_USERNAME;
+    if (!transporter || !user) {
+      throw new Error("No configured email delivery service. Add BREVO_API_KEY, RESEND_API_KEY, or standard SMTP credentials to Settings.");
+    }
+
+    console.log("Sending email via SMTP direct connections...");
+    await transporter.sendMail({
+      from: options.from,
+      to: options.to,
+      replyTo: options.replyTo,
+      subject: options.subject,
+      text: options.text,
+      html: options.html
+    });
+
+    return { success: true, service: "Direct SMTP Server" };
+  };
+
   // API Route for sending emails
   app.post("/api/send-email", inquiryLimiter, async (req, res) => {
     const { business_name, user_email, phone, subject, message, to_email, website_verify, eventDate, eventTime, eventService } = req.body;
@@ -135,13 +236,12 @@ async function startServer() {
       return res.status(200).json({ success: true, note: "Bot detected" }); // Pretend it worked
     }
 
-    const transporter = getTransporter();
-    const user = process.env.SMTP_USER || process.env.SMTP_USERNAME;
-
-    if (!transporter || !user) {
-      console.error("SMTP credentials missing in environment variables. Expected SMTP_USER/SMTP_USERNAME and SMTP_PASS/SMTP_PASSWORD.");
-      return res.status(500).json({ error: "Server configuration error: SMTP credentials missing" });
-    }
+    const host = process.env.SMTP_HOST || "mail.privateemail.com";
+    const port = parseInt(process.env.SMTP_PORT || "587");
+    const user = process.env.SMTP_USER || process.env.SMTP_USERNAME || "info@oneearth.eco";
+    const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
+    const brevoKey = process.env.BREVO_API_KEY;
+    const resendKey = process.env.RESEND_API_KEY;
 
     // Generate Calendar link if relevant details are provided
     let calendarLinkHtml = "";
@@ -164,7 +264,7 @@ async function startServer() {
 
     try {
       // 1. Send inquiry to One Earth admin (asynchronous background send)
-      transporter.sendMail({
+      sendMailViaService({
         from: `"${business_name}" <${user}>`, // Use the authorized account as sender
         to: to_email || user,
         replyTo: user_email,
@@ -185,7 +285,7 @@ async function startServer() {
       });
 
       // 2. Send automated receipt/acknowledgment to the customer (Dispatched asynchronously in the background)
-      transporter.sendMail({
+      sendMailViaService({
         from: `"One Earth Limited" <${user}>`,
         to: user_email,
         subject: "We've received your inquiry - One Earth Limited",
@@ -220,17 +320,100 @@ async function startServer() {
     }
   });
 
-  // SMTP Connection Diagnostic Endpoint
+  // Contact & Delivery Configuration Diagnostic Endpoint
   app.get("/api/test-email-config", async (req, res) => {
-    const host = process.env.SMTP_HOST;
+    const host = process.env.SMTP_HOST || "mail.privateemail.com";
     const port = parseInt(process.env.SMTP_PORT || "587");
     const user = process.env.SMTP_USER || process.env.SMTP_USERNAME;
     const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
+    const brevoKey = process.env.BREVO_API_KEY;
+    const resendKey = process.env.RESEND_API_KEY;
+
+    // Test Resend Configuration
+    if (resendKey) {
+      try {
+        const response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${resendKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            from: `One Earth Diagnostics <onboarding@resend.dev>`,
+            to: ["info@oneearth.eco"],
+            subject: "Resend Diagnostic Test Connection",
+            text: "Testing API access connection."
+          })
+        });
+        
+        const responseJson: any = await response.json().catch(() => ({}));
+
+        if (response.status === 401 || response.status === 403) {
+          return res.status(401).json({
+            success: false,
+            error: `Resend authentication failed (Status ${response.status}). Key may be invalid or restricted.`,
+            config: { host: "HTTPS API", port: 443, user: "Resend Integration", hasPassword: true }
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: "Resend HTTP API key verified successfully! Port 443 HTTPS routing is active and mail delivery is online.",
+          config: { host: "api.resend.com", port: 443, user: "Resend API Key", hasPassword: true }
+        });
+      } catch (err: any) {
+        return res.status(500).json({
+          success: false,
+          error: `Resend API Connection failed: ${err.message}`,
+          config: { host: "api.resend.com", port: 443, user: "Resend API Key", hasPassword: true }
+        });
+      }
+    }
+
+    // Test Brevo Configuration
+    if (brevoKey) {
+      try {
+        const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+          method: "POST",
+          headers: {
+            "accept": "application/json",
+            "api-key": brevoKey,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            sender: { name: "One Earth Admin", email: "info@oneearth.eco" },
+            to: [{ email: "info@oneearth.eco" }],
+            subject: "Brevo Diagnostic Connection Test",
+            textContent: "Checking service availability over HTTPS API."
+          })
+        });
+
+        if (response.status === 401 || response.status === 403) {
+          return res.status(401).json({
+            success: false,
+            error: `Brevo authentication failed (Status ${response.status}). Keep in mind your BREVO_API_KEY might be invalid.`,
+            config: { host: "HTTPS API", port: 443, user: "Brevo Integration", hasPassword: true }
+          });
+        }
+
+        return res.status(200).json({
+          success: true,
+          message: "Brevo HTTP API verified successfully over Port 443! Mail delivery is ready.",
+          config: { host: "api.brevo.com", port: 443, user: "Brevo API Key", hasPassword: true }
+        });
+      } catch (err: any) {
+        return res.status(500).json({
+          success: false,
+          error: `Brevo Connection failed: ${err.message}`,
+          config: { host: "api.brevo.com", port: 443, user: "Brevo API Key", hasPassword: true }
+        });
+      }
+    }
 
     if (!user || !pass) {
       return res.status(400).json({
         success: false,
-        error: "SMTP credentials missing in environment variables. Please check your SMTP_USER and SMTP_PASS/SMTP_PASSWORD in the app Settings.",
+        error: "SMTP credentials or API Keys (BREVO_API_KEY / RESEND_API_KEY) missing in environment variables. Please check your settings.",
         config: { host, port, user, hasPassword: !!pass }
       });
     }

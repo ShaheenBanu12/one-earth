@@ -1486,9 +1486,15 @@ export default function App() {
                                   {smtpDiagnosticsResult.code && <p>Code: {smtpDiagnosticsResult.code}</p>}
                                   {smtpDiagnosticsResult.command && <p>Command: {smtpDiagnosticsResult.command}</p>}
                                 </div>
-                                <p className="text-[10px] text-brand-primary opacity-70 leading-normal">
-                                  💡 <em>Tip: Verify your SMTP credentials (SMTP_USER / SMTP_PASS) are saved in the Settings panel of the developer workspace and restart the server.</em>
-                                </p>
+                                <div className="text-[11px] text-brand-primary/90 space-y-1.5 leading-normal bg-brand-soft/20 p-2.5 rounded-lg border border-brand-border/40 mt-2">
+                                  <p className="font-bold text-amber-300">💡 Why is this happening and how to fix:</p>
+                                  <p className="opacity-80">This <strong>timeout</strong> usually means the hosting cloud sandbox is firewalled or Namecheap's server is blocklisting cloud IP addresses to prevent spam.</p>
+                                  <div className="space-y-1 font-sans text-[10px] pl-2 border-l border-brand-sage mt-1 opacity-90">
+                                    <p><strong>1. Try Port 465 (SSL):</strong> Change <code>SMTP_PORT</code> in App Settings to <code>465</code>. Port 465 is secure & encrypted from start, often bypassing STARTTLS filters.</p>
+                                    <p><strong>2. Use Gmail:</strong> Use <code>smtp.gmail.com</code> (Port 465 or 587) with your Gmail account and a Google <em>App Password</em> (created in Google Account security settings).</p>
+                                    <p><strong>3. Use Brevo / Mailjet (Recommended):</strong> Free transactional email APIs (like Brevo, Mailjet, SendGrid) are designed specifically for Cloud Apps. Since they have excellent IP reputations, they are never blocked by firewalls.</p>
+                                  </div>
+                                </div>
                               </div>
                             )}
 
