@@ -113,9 +113,6 @@ async function startServer() {
 
     cachedConfigStr = currentConfigStr;
     transporterInstance = nodemailer.createTransport({
-      pool: true, // Enable TCP/SMTP connection pooling to reuse active connections
-      maxConnections: 5,
-      maxMessages: 100,
       host,
       port,
       secure: port === 465, // true for 465, false for other ports
@@ -125,7 +122,8 @@ async function startServer() {
       },
       tls: {
         rejectUnauthorized: false // Often needed for STARTTLS on port 587 in some environments
-      }
+      },
+      connectionTimeout: 10000 // 10 second timeout to prevent silent hanging
     });
 
     return transporterInstance;
@@ -140,90 +138,134 @@ async function startServer() {
     text: string;
     html: string;
   }) => {
-    const brevoKey = process.env.BREVO_API_KEY;
+    let brevoKey = process.env.BREVO_API_KEY;
     const resendKey = process.env.RESEND_API_KEY;
 
+    if (!brevoKey && resendKey && resendKey.startsWith("xkeysib-")) {
+      brevoKey = resendKey;
+    }
+    
+    const errors: string[] = [];
+
+    const isValidKey = (key: string | undefined): boolean => {
+      if (!key) return false;
+      const k = key.trim();
+      return k !== "" && !k.startsWith("YOUR_") && !k.startsWith("MY_") && k !== "undefined";
+    };
+
     // 1. Try Brevo HTTP API (Port 443 - Completely unblocked on Cloud platforms)
-    if (brevoKey) {
-      console.log("Sending email via Brevo HTTPS REST API (Port 443)...");
-      const senderEmail = process.env.SMTP_USER || process.env.SMTP_USERNAME || "info@oneearth.eco";
-      
-      // Extract decorative name from from-header if present
-      const nameMatch = options.from.match(/^"([^"]+)"/);
-      const senderName = nameMatch ? nameMatch[1] : "One Earth Limited";
+    if (isValidKey(brevoKey)) {
+      try {
+        console.log("Sending email via Brevo HTTPS REST API (Port 443)...");
+        const senderEmail = process.env.SMTP_USER || process.env.SMTP_USERNAME || "info@oneearth.eco";
+        
+        // Extract decorative name from from-header if present
+        const nameMatch = options.from.match(/^"([^"]+)"/);
+        const senderName = nameMatch ? nameMatch[1] : "One Earth Limited";
 
-      const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-        method: "POST",
-        headers: {
-          "accept": "application/json",
-          "api-key": brevoKey,
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          sender: { name: senderName, email: senderEmail },
-          to: [{ email: options.to }],
-          replyTo: options.replyTo ? { email: options.replyTo } : undefined,
-          subject: options.subject,
-          htmlContent: options.html,
-          textContent: options.text
-        })
-      });
+        const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+          method: "POST",
+          headers: {
+            "accept": "application/json",
+            "api-key": brevoKey!,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            sender: { name: senderName, email: senderEmail },
+            to: [{ email: options.to }],
+            replyTo: options.replyTo ? { email: options.replyTo } : undefined,
+            subject: options.subject,
+            htmlContent: options.html,
+            textContent: options.text
+          })
+        });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Brevo HTTP API delivery failed (Status ${response.status}): ${errText}`);
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Brevo HTTP API delivery failed (Status ${response.status}): ${errText}`);
+        }
+        return { success: true, service: "Brevo HTTP API" };
+      } catch (err: any) {
+        console.warn("Brevo HTTP API email attempt failed. Will try other configured methods.", err.message);
+        errors.push(`Brevo: ${err.message}`);
       }
-      return { success: true, service: "Brevo HTTP API" };
     }
 
     // 2. Try Resend HTTP API (Port 443)
-    if (resendKey) {
-      console.log("Sending email via Resend HTTPS REST API (Port 443)...");
-      const fromEmail = process.env.SMTP_USER || process.env.SMTP_USERNAME || "info@oneearth.eco";
-      const nameMatch = options.from.match(/^"([^"]+)"/);
-      const senderName = nameMatch ? nameMatch[1] : "One Earth Limited";
+    if (isValidKey(resendKey)) {
+      try {
+        console.log("Sending email via Resend HTTPS REST API (Port 443)...");
+        const fromEmail = process.env.SMTP_USER || process.env.SMTP_USERNAME || "info@oneearth.eco";
+        const nameMatch = options.from.match(/^"([^"]+)"/);
+        const senderName = nameMatch ? nameMatch[1] : "One Earth Limited";
 
-      const response = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${resendKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          from: `${senderName} <${fromEmail}>`,
-          to: [options.to],
-          reply_to: options.replyTo,
-          subject: options.subject,
-          html: options.html,
-          text: options.text
-        })
-      });
+        const response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${resendKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            from: `${senderName} <${fromEmail}>`,
+            to: [options.to],
+            reply_to: options.replyTo,
+            subject: options.subject,
+            html: options.html,
+            text: options.text
+          })
+        });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Resend HTTP API delivery failed (Status ${response.status}): ${errText}`);
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Resend HTTP API delivery failed (Status ${response.status}): ${errText}`);
+        }
+        return { success: true, service: "Resend HTTP API" };
+      } catch (err: any) {
+        console.warn("Resend HTTP API email attempt failed. Will try other configured methods.", err.message);
+        errors.push(`Resend: ${err.message}`);
       }
-      return { success: true, service: "Resend HTTP API" };
     }
 
     // 3. SMTP Fallback
     const transporter = getTransporter();
     const user = process.env.SMTP_USER || process.env.SMTP_USERNAME;
-    if (!transporter || !user) {
-      throw new Error("No configured email delivery service. Add BREVO_API_KEY, RESEND_API_KEY, or standard SMTP credentials to Settings.");
+    if (transporter && user) {
+      try {
+        console.log("Sending email via SMTP direct connections with format custom FROM:", options.from);
+        await transporter.sendMail({
+          from: options.from,
+          to: options.to,
+          replyTo: options.replyTo,
+          subject: options.subject,
+          text: options.text,
+          html: options.html
+        });
+
+        return { success: true, service: "Direct SMTP Server" };
+      } catch (err: any) {
+        console.warn("SMTP email attempt with custom FROM failed. Retrying with clean, raw envelope sender...", err.message);
+        try {
+          // Fallback to sending-address-only as the from header to satisfy incredibly strict SMTP servers
+          await transporter.sendMail({
+            from: user,
+            to: options.to,
+            replyTo: options.replyTo,
+            subject: options.subject,
+            text: options.text,
+            html: options.html
+          });
+          return { success: true, service: "Direct SMTP Server (Raw From Fallback)" };
+        } catch (retryErr: any) {
+          console.error("SMTP email send failed even with raw envelop:", retryErr);
+          errors.push(`SMTP: ${retryErr.message}`);
+        }
+      }
+    } else {
+      errors.push("SMTP service not configured (missing SMTP_USER or SMTP_PASS).");
     }
 
-    console.log("Sending email via SMTP direct connections...");
-    await transporter.sendMail({
-      from: options.from,
-      to: options.to,
-      replyTo: options.replyTo,
-      subject: options.subject,
-      text: options.text,
-      html: options.html
-    });
-
-    return { success: true, service: "Direct SMTP Server" };
+    // If we reached here, ALL attempted services failed!
+    throw new Error(`All email transmission methods failed: [${errors.join(" | ")}]`);
   };
 
   // API Route for sending emails
@@ -263,60 +305,66 @@ async function startServer() {
     }
 
     try {
-      // 1. Send inquiry to One Earth admin (asynchronous background send)
-      sendMailViaService({
-        from: `"${business_name}" <${user}>`, // Use the authorized account as sender
-        to: to_email || user,
-        replyTo: user_email,
-        subject: `[Website Inquiry] ${subject}`,
-        text: `From: ${business_name} (${user_email})\nPhone: ${phone || "N/A"}\n\nMessage:\n${message}${calendarLinkText}`,
-        html: `
-          <h3>New Website Inquiry</h3>
-          <p><strong>Business:</strong> ${business_name}</p>
-          <p><strong>Email:</strong> ${user_email}</p>
-          <p><strong>Phone:</strong> ${phone || "N/A"}</p>
-          <p><strong>Subject:</strong> ${subject}</p>
-          <p><strong>Message:</strong></p>
-          <p>${message.replace(/\n/g, '<br>')}</p>
-          ${calendarLinkHtml ? `<hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 25px 0;"> ${calendarLinkHtml}` : ""}
-        `,
-      }).catch((adminMailErr: any) => {
-        console.error("Admin inquiry background send failed (handled):", adminMailErr);
-      });
+      // 1. Send inquiry to One Earth admin
+      try {
+        await sendMailViaService({
+          from: `"${business_name.replace(/"/g, "'")}" <${user}>`, // Use the authorized account as sender
+          to: to_email || user,
+          replyTo: user_email,
+          subject: `[Website Inquiry] ${subject}`,
+          text: `From: ${business_name} (${user_email})\nPhone: ${phone || "N/A"}\n\nMessage:\n${message}${calendarLinkText}`,
+          html: `
+            <h3>New Website Inquiry</h3>
+            <p><strong>Business:</strong> ${business_name}</p>
+            <p><strong>Email:</strong> ${user_email}</p>
+            <p><strong>Phone:</strong> ${phone || "N/A"}</p>
+            <p><strong>Subject:</strong> ${subject}</p>
+            <p><strong>Message:</strong></p>
+            <p>${message.replace(/\n/g, '<br>')}</p>
+            ${calendarLinkHtml ? `<hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 25px 0;"> ${calendarLinkHtml}` : ""}
+          `,
+        });
+      } catch (adminMailErr: any) {
+        console.error("Admin inquiry send failed:", adminMailErr);
+        return res.status(500).json({ error: "Failed to deliver inquiry to admin: " + adminMailErr.message });
+      }
 
-      // 2. Send automated receipt/acknowledgment to the customer (Dispatched asynchronously in the background)
-      sendMailViaService({
-        from: `"One Earth Limited" <${user}>`,
-        to: user_email,
-        subject: "We've received your inquiry - One Earth Limited",
-        text: `Thank you for reaching out!\n\nHi ${business_name},\n\nWe've received your inquiry regarding "${subject}" and our team is currently reviewing your message.\n\nWe aim to get back to you within 24 hours.\n\n"Because we all share one planet — and every action counts."\n\nBest regards,\nThe One Earth Team\n${calendarLinkText}`,
-        html: `
-          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e5e7eb; border-radius: 20px;">
-            <h2 style="color: #2d3436; font-size: 24px; font-weight: bold; margin-bottom: 20px; font-family: sans-serif;">Thank you for reaching out!</h2>
-            <p style="font-size: 15px; color: #2d3436;">Hi ${business_name},</p>
-            <p style="font-size: 15px; color: #333333; line-height: 1.5; margin-bottom: 20px;">We've received your inquiry regarding <strong>"${subject}"</strong> and our team is currently reviewing your message.</p>
-            <p style="font-size: 15px; font-weight: bold; color: #2d3436; margin: 20px 0;">We aim to get back to you within 24 hours.</p>
-            
-            ${calendarLinkHtml}
-            
-            <div style="margin: 30px 0; padding: 20px; background-color: #f9fafb; border-radius: 12px; border-left: 4px solid #788c78;">
-              <p style="margin: 0; font-style: italic; color: #4b5563; font-size: 14px;">"Because we all share one planet — and every action counts."</p>
+      // 2. Send automated receipt/acknowledgment to the customer
+      try {
+        await sendMailViaService({
+          from: `"One Earth Limited" <${user}>`,
+          to: user_email,
+          subject: "We've received your inquiry - One Earth Limited",
+          text: `Thank you for reaching out!\n\nHi ${business_name},\n\nWe've received your inquiry regarding "${subject}" and our team is currently reviewing your message.\n\nWe aim to get back to you within 24 hours.\n\n"Because we all share one planet — and every action counts."\n\nBest regards,\nThe One Earth Team\n${calendarLinkText}`,
+          html: `
+            <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e5e7eb; border-radius: 20px;">
+              <h2 style="color: #2d3436; font-size: 24px; font-weight: bold; margin-bottom: 20px; font-family: sans-serif;">Thank you for reaching out!</h2>
+              <p style="font-size: 15px; color: #2d3436;">Hi ${business_name},</p>
+              <p style="font-size: 15px; color: #333333; line-height: 1.5; margin-bottom: 20px;">We've received your inquiry regarding <strong>"${subject}"</strong> and our team is currently reviewing your message.</p>
+              <p style="font-size: 15px; font-weight: bold; color: #2d3436; margin: 20px 0;">We aim to get back to you within 24 hours.</p>
+              
+              ${calendarLinkHtml}
+              
+              <div style="margin: 30px 0; padding: 20px; background-color: #f9fafb; border-radius: 12px; border-left: 4px solid #788c78;">
+                <p style="margin: 0; font-style: italic; color: #4b5563; font-size: 14px;">"Because we all share one planet — and every action counts."</p>
+              </div>
+              
+              <p style="font-size: 15px; color: #333333; line-height: 1.5; margin: 0;">Best regards,<br><strong>The One Earth Team</strong></p>
+              <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 25px 0 20px 0;">
+              <p style="font-size: 12px; color: #9ca3af; margin: 0;">One Earth Limited | Derby, United Kingdom</p>
             </div>
-            
-            <p style="font-size: 15px; color: #333333; line-height: 1.5; margin: 0;">Best regards,<br><strong>The One Earth Team</strong></p>
-            <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 25px 0 20px 0;">
-            <p style="font-size: 12px; color: #9ca3af; margin: 0;">One Earth Limited | Derby, United Kingdom</p>
-          </div>
-        `,
-      }).catch((autoReplyErr: any) => {
-        console.error("Auto-reply background send failed (handled):", autoReplyErr);
-      });
+          `,
+        });
+      } catch (autoReplyErr: any) {
+        console.error("Auto-reply send failed:", autoReplyErr);
+        // We do not fail the overall request if only the auto-reply fails, but we should inform the client
+        return res.status(200).json({ success: true, note: "Admin inquiry sent, but auto-reply to customer failed to dispatch." });
+      }
 
-      // Immediately return HTTP 200 without waiting for the slow SMTP round-trips
       res.status(200).json({ success: true });
-    } catch (error) {
-      console.error("Error setting up background email dispatch:", error);
-      res.status(500).json({ error: "Failed to send email" });
+    } catch (error: any) {
+      console.error("Error routing email dispatch:", error);
+      res.status(500).json({ error: "Failed to send email: " + error.message });
     }
   });
 
@@ -329,9 +377,54 @@ async function startServer() {
     const brevoKey = process.env.BREVO_API_KEY;
     const resendKey = process.env.RESEND_API_KEY;
 
-    // Test Resend Configuration
-    if (resendKey) {
+    const errors: string[] = [];
+
+    const isValidKey = (key: string | undefined): boolean => {
+      if (!key) return false;
+      const k = key.trim();
+      return k !== "" && !k.startsWith("YOUR_") && !k.startsWith("MY_") && k !== "undefined";
+    };
+
+    // 1. Try Brevo Diagnostic if configured (Preempts Resend, matching sending precedence)
+    if (isValidKey(brevoKey)) {
       try {
+        console.log("Testing Brevo Key...");
+        const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+          method: "POST",
+          headers: {
+            "accept": "application/json",
+            "api-key": brevoKey!,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            sender: { name: "One Earth Admin", email: "info@oneearth.eco" },
+            to: [{ email: "info@oneearth.eco" }],
+            subject: "Brevo Diagnostic Connection Test",
+            textContent: "Checking service availability over HTTPS API."
+          })
+        });
+
+        if (response.status === 401 || response.status === 403) {
+          errors.push(`Brevo Diagnostic: Authentication failed (Status ${response.status}). Key may be invalid.`);
+        } else if (!response.ok) {
+          const errText = await response.text();
+          errors.push(`Brevo Diagnostic: API error (Status ${response.status}): ${errText}`);
+        } else {
+          return res.status(200).json({
+            success: true,
+            message: "Brevo HTTP API verified successfully over Port 443! Mail delivery is active and online.",
+            config: { host: "api.brevo.com", port: 443, user: "Brevo API Key", hasPassword: true }
+          });
+        }
+      } catch (err: any) {
+        errors.push(`Brevo Diagnostic: Connection failed: ${err.message}`);
+      }
+    }
+
+    // 2. Try Resend Diagnostic if configured
+    if (isValidKey(resendKey)) {
+      try {
+        console.log("Testing Resend Key...");
         const response = await fetch("https://api.resend.com/emails", {
           method: "POST",
           headers: {
@@ -345,106 +438,99 @@ async function startServer() {
             text: "Testing API access connection."
           })
         });
-        
-        const responseJson: any = await response.json().catch(() => ({}));
 
         if (response.status === 401 || response.status === 403) {
-          return res.status(401).json({
-            success: false,
-            error: `Resend authentication failed (Status ${response.status}). Key may be invalid or restricted.`,
-            config: { host: "HTTPS API", port: 443, user: "Resend Integration", hasPassword: true }
+          errors.push(`Resend Diagnostic: Authentication failed (Status ${response.status}). Key may be invalid or restricted.`);
+        } else if (!response.ok) {
+          const errText = await response.text();
+          errors.push(`Resend Diagnostic: API error (Status ${response.status}): ${errText}`);
+        } else {
+          return res.status(200).json({
+            success: true,
+            message: "Resend HTTP API key verified successfully! Port 443 HTTPS routing is active and mail delivery is online.",
+            config: { host: "api.resend.com", port: 443, user: "Resend API Key", hasPassword: true }
           });
         }
-
-        return res.status(200).json({
-          success: true,
-          message: "Resend HTTP API key verified successfully! Port 443 HTTPS routing is active and mail delivery is online.",
-          config: { host: "api.resend.com", port: 443, user: "Resend API Key", hasPassword: true }
-        });
       } catch (err: any) {
-        return res.status(500).json({
-          success: false,
-          error: `Resend API Connection failed: ${err.message}`,
-          config: { host: "api.resend.com", port: 443, user: "Resend API Key", hasPassword: true }
-        });
+        errors.push(`Resend Diagnostic: Connection failed: ${err.message}`);
       }
     }
 
-    // Test Brevo Configuration
-    if (brevoKey) {
+    // 3. Fallback to direct SMTP diagnostics if credentials are configured
+    const hasSmtpUser = user && user.trim() !== "";
+    const hasSmtpPass = pass && pass.trim() !== "";
+
+    if (hasSmtpUser && hasSmtpPass) {
       try {
-        const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-          method: "POST",
-          headers: {
-            "accept": "application/json",
-            "api-key": brevoKey,
-            "content-type": "application/json"
-          },
-          body: JSON.stringify({
-            sender: { name: "One Earth Admin", email: "info@oneearth.eco" },
-            to: [{ email: "info@oneearth.eco" }],
-            subject: "Brevo Diagnostic Connection Test",
-            textContent: "Checking service availability over HTTPS API."
-          })
+        console.log("Testing SMTP connection & credentials...");
+        const testTransporter = nodemailer.createTransport({
+          host,
+          port,
+          secure: port === 465,
+          auth: { user, pass },
+          tls: { rejectUnauthorized: false },
+          connectionTimeout: 10000
         });
 
-        if (response.status === 401 || response.status === 403) {
-          return res.status(401).json({
-            success: false,
-            error: `Brevo authentication failed (Status ${response.status}). Keep in mind your BREVO_API_KEY might be invalid.`,
-            config: { host: "HTTPS API", port: 443, user: "Brevo Integration", hasPassword: true }
+        await testTransporter.verify();
+        
+        console.log("SMTP connection verified! Initiating dynamic test email dispatch...");
+        
+        try {
+          await testTransporter.sendMail({
+            from: `"One Earth Diagnostics" <${user}>`,
+            to: user,
+            subject: "One Earth SMTP Diagnostic Connection Test",
+            text: `SMTP Configuration is healthy!\nHost: ${host}\nPort: ${port}\nUser: ${user}\n\nConnection and mail dispatch verified successfully at ${new Date().toISOString()}.`,
+            html: `
+              <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #788c78; border-radius: 12px;">
+                <h2 style="color: #4CAF50;">✅ SMTP Diagnostic Success</h2>
+                <p>Hello,</p>
+                <p>This is an automated connection test confirming your SMTP server dispatch is fully functional!</p>
+                <table style="width: 100%; border-collapse: collapse; margin: 15px 0;">
+                  <tr style="background: #f9f9f9;"><td style="padding: 8px; font-weight: bold;">SMTP Host</td><td style="padding: 8px;">${host}</td></tr>
+                  <tr><td style="padding: 8px; font-weight: bold;">SMTP Port</td><td style="padding: 8px;">${port}</td></tr>
+                  <tr style="background: #f9f9f9;"><td style="padding: 8px; font-weight: bold;">SMTP User</td><td style="padding: 8px;">${user}</td></tr>
+                  <tr><td style="padding: 8px; font-weight: bold;">Timestamp</td><td style="padding: 8px;">${new Date().toISOString()}</td></tr>
+                </table>
+                <p>Mail is actively sending and fully functional.</p>
+              </div>
+            `
           });
-        }
 
-        return res.status(200).json({
-          success: true,
-          message: "Brevo HTTP API verified successfully over Port 443! Mail delivery is ready.",
-          config: { host: "api.brevo.com", port: 443, user: "Brevo API Key", hasPassword: true }
-        });
+          return res.status(200).json({
+            success: true,
+            message: "SMTP verified and test email dispatched successfully! Your credentials and mail delivery are 100% active and healthy.",
+            config: { host, port, user, hasPassword: true }
+          });
+        } catch (sendErr: any) {
+          console.error("SMTP verification succeeded, but mail send failed:", sendErr);
+          errors.push(`SMTP authenticated successfully, but test email delivery failed. Reason: ${sendErr.message || "Unknown write error"} (Code: ${sendErr.code || "N/A"})`);
+        }
       } catch (err: any) {
-        return res.status(500).json({
-          success: false,
-          error: `Brevo Connection failed: ${err.message}`,
-          config: { host: "api.brevo.com", port: 443, user: "Brevo API Key", hasPassword: true }
-        });
+        errors.push(`SMTP Diagnostic (Host: ${host}:${port}) failed connection/auth check. Code: ${err.code || "N/A"}. Reason: ${err.message || "Unknown error"}`);
       }
     }
 
-    if (!user || !pass) {
-      return res.status(400).json({
-        success: false,
-        error: "SMTP credentials or API Keys (BREVO_API_KEY / RESEND_API_KEY) missing in environment variables. Please check your settings.",
-        config: { host, port, user, hasPassword: !!pass }
-      });
-    }
-
-    try {
-      // Create a fresh test transporter with connection timeout
-      const testTransporter = nodemailer.createTransport({
-        host,
-        port,
-        secure: port === 465,
-        auth: { user, pass },
-        tls: { rejectUnauthorized: false },
-        connectionTimeout: 10000 // 10 second timeout
-      });
-
-      await testTransporter.verify();
-      return res.status(200).json({
-        success: true,
-        message: "SMTP connection verified successfully! Your credentials and network configuration are working.",
-        config: { host, port, user, hasPassword: true }
-      });
-    } catch (err: any) {
-      console.error("Test SMTP Connection failed:", err);
+    // compile and return failures if we reach this point
+    if (errors.length > 0) {
       return res.status(500).json({
         success: false,
-        error: err.message || "Unknown SMTP verification error",
-        code: err.code || "N/A",
-        command: err.command || "N/A",
-        config: { host, port, user, hasPassword: true }
+        error: errors.join(" | "),
+        config: {
+          host: isValidKey(brevoKey) ? "api.brevo.com" : (isValidKey(resendKey) ? "api.resend.com" : host),
+          port: isValidKey(brevoKey) || isValidKey(resendKey) ? 443 : port,
+          user: isValidKey(brevoKey) ? "Brevo API Integration" : (isValidKey(resendKey) ? "Resend API Integration" : user || "Not configured"),
+          hasPassword: isValidKey(brevoKey) || isValidKey(resendKey) || !!pass
+        }
       });
     }
+
+    return res.status(400).json({
+      success: false,
+      error: "No email services configured. Ensure BREVO_API_KEY, RESEND_API_KEY, or SMTP_USER & SMTP_PASS are set in Settings.",
+      config: { host, port, user: user || "None", hasPassword: !!pass }
+    });
   });
 
   // Vite middleware for development
