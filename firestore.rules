@@ -60,7 +60,7 @@ service cloud.firestore {
 
     match /holidays/{holidayId} {
       allow read, list: if true;
-      allow write: if isValidHoliday(incoming());
+      allow create, update: if isValidHoliday(incoming());
       allow delete: if true;
     }
 

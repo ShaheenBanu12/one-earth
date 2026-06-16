@@ -96,10 +96,14 @@ async function startServer() {
   let cachedConfigStr = "";
   let transporterInstance: any = null;
   const getTransporter = () => {
-    const host = process.env.SMTP_HOST || "";
+    let host = process.env.SMTP_HOST || "";
     const port = parseInt(process.env.SMTP_PORT || "587");
     const user = process.env.SMTP_USER || process.env.SMTP_USERNAME || "";
     const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || "";
+
+    if (!host && user.includes("@gmail.com")) {
+      host = "smtp.gmail.com";
+    }
 
     const currentConfigStr = `${host}:${port}:${user}:${pass}`;
 
@@ -107,7 +111,7 @@ async function startServer() {
       return transporterInstance;
     }
 
-    if (!user || !pass) {
+    if (!user || !pass || !host) {
       return null;
     }
 
@@ -129,7 +133,7 @@ async function startServer() {
     return transporterInstance;
   };
 
-  // Modern unified sending helper supporting SMTP fallback + HTTP REST APIs (which bypass Port restrictions)
+  // Modern unified sending helper supporting SMTP fallback
   const sendMailViaService = async (options: {
     from: string;
     to: string;
@@ -138,95 +142,9 @@ async function startServer() {
     text: string;
     html: string;
   }) => {
-    let brevoKey = process.env.BREVO_API_KEY;
-    const resendKey = process.env.RESEND_API_KEY;
-
-    if (!brevoKey && resendKey && resendKey.startsWith("xkeysib-")) {
-      brevoKey = resendKey;
-    }
-    
     const errors: string[] = [];
 
-    const isValidKey = (key: string | undefined): boolean => {
-      if (!key) return false;
-      const k = key.trim();
-      return k !== "" && !k.startsWith("YOUR_") && !k.startsWith("MY_") && k !== "undefined";
-    };
-
-    // 1. Try Brevo HTTP API (Port 443 - Completely unblocked on Cloud platforms)
-    if (isValidKey(brevoKey)) {
-      try {
-        console.log("Sending email via Brevo HTTPS REST API (Port 443)...");
-        const senderEmail = process.env.SMTP_USER || process.env.SMTP_USERNAME || "info@oneearth.eco";
-        
-        // Extract decorative name from from-header if present
-        const nameMatch = options.from.match(/^"([^"]+)"/);
-        const senderName = nameMatch ? nameMatch[1] : "One Earth Limited";
-
-        const response = await fetch("https://api.brevo.com/v3/smtp/email", {
-          method: "POST",
-          headers: {
-            "accept": "application/json",
-            "api-key": brevoKey!,
-            "content-type": "application/json"
-          },
-          body: JSON.stringify({
-            sender: { name: senderName, email: senderEmail },
-            to: [{ email: options.to }],
-            replyTo: options.replyTo ? { email: options.replyTo } : undefined,
-            subject: options.subject,
-            htmlContent: options.html,
-            textContent: options.text
-          })
-        });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`Brevo HTTP API delivery failed (Status ${response.status}): ${errText}`);
-        }
-        return { success: true, service: "Brevo HTTP API" };
-      } catch (err: any) {
-        console.warn("Brevo HTTP API email attempt failed. Will try other configured methods.", err.message);
-        errors.push(`Brevo: ${err.message}`);
-      }
-    }
-
-    // 2. Try Resend HTTP API (Port 443)
-    if (isValidKey(resendKey)) {
-      try {
-        console.log("Sending email via Resend HTTPS REST API (Port 443)...");
-        const fromEmail = process.env.SMTP_USER || process.env.SMTP_USERNAME || "info@oneearth.eco";
-        const nameMatch = options.from.match(/^"([^"]+)"/);
-        const senderName = nameMatch ? nameMatch[1] : "One Earth Limited";
-
-        const response = await fetch("https://api.resend.com/emails", {
-          method: "POST",
-          headers: {
-            "Authorization": `Bearer ${resendKey}`,
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            from: `${senderName} <${fromEmail}>`,
-            to: [options.to],
-            reply_to: options.replyTo,
-            subject: options.subject,
-            html: options.html,
-            text: options.text
-          })
-        });
-
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`Resend HTTP API delivery failed (Status ${response.status}): ${errText}`);
-        }
-        return { success: true, service: "Resend HTTP API" };
-      } catch (err: any) {
-        console.warn("Resend HTTP API email attempt failed. Will try other configured methods.", err.message);
-        errors.push(`Resend: ${err.message}`);
-      }
-    }
-
-    // 3. SMTP Fallback
+    // SMTP
     const transporter = getTransporter();
     const user = process.env.SMTP_USER || process.env.SMTP_USERNAME;
     if (transporter && user) {

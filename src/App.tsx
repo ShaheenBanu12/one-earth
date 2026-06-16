@@ -838,10 +838,9 @@ export default function App() {
   };
 
   const handleCancelBooking = async (slotId: string) => {
-    if (!window.confirm("Are you sure you want to cancel this booking?")) return;
     try {
-      const { deleteDoc, doc } = await import("firebase/firestore");
       await deleteDoc(doc(db, "busy_slots", slotId));
+      setBookingToDelete(null);
     } catch (error) {
       console.error("Cancel error:", error);
     }
@@ -932,6 +931,7 @@ export default function App() {
   };
 
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [bookingToDelete, setBookingToDelete] = useState<string | null>(null);
 
   const handleLogoutClick = () => {
     setShowLogoutConfirm(true);
@@ -1278,7 +1278,7 @@ export default function App() {
                                  </div>
                               </div>
                               <button 
-                                 onClick={() => booking.id && handleCancelBooking(booking.id)}
+                                 onClick={() => booking.id && setBookingToDelete(booking.id)}
                                  className="bg-red-50 text-red-600 px-3 py-1.5 rounded-xl text-[8px] font-bold uppercase tracking-widest hover:bg-red-600 hover:text-white transition-all border border-red-100"
                               >
                                  Delete
@@ -1519,6 +1519,42 @@ export default function App() {
                   className="flex-1 py-4 bg-brand-primary text-white rounded-2xl text-[10px] font-bold uppercase tracking-[0.2em] hover:bg-brand-sage transition-all shadow-lg"
                 >
                   Yes, Logout
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+        {bookingToDelete && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-brand-primary/60 backdrop-blur-sm">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative bg-white rounded-[40px] p-10 md:p-14 w-full max-w-lg shadow-2xl text-center space-y-8"
+            >
+              <div className="w-20 h-20 rounded-full bg-red-50 text-red-600 flex items-center justify-center mx-auto">
+                <AlertCircle className="w-10 h-10" />
+              </div>
+              
+              <div className="space-y-4">
+                <h3 className="text-3xl font-serif italic text-brand-primary">Delete <span className="not-italic">Booking</span></h3>
+                <p className="text-base text-brand-primary/60 leading-relaxed">
+                  Are you sure you want to delete this booking? This action cannot be undone.
+                </p>
+              </div>
+
+              <div className="flex flex-col sm:flex-row gap-4">
+                <button 
+                  onClick={() => setBookingToDelete(null)}
+                  className="flex-1 py-4 border border-brand-border rounded-2xl text-[10px] font-bold uppercase tracking-widest hover:bg-brand-bg transition-all"
+                >
+                  Cancel
+                </button>
+                <button 
+                  onClick={() => handleCancelBooking(bookingToDelete)}
+                  className="flex-1 py-4 bg-red-600 text-white rounded-2xl text-[10px] font-bold uppercase tracking-[0.2em] hover:bg-red-700 transition-all shadow-lg"
+                >
+                  Delete Booking
                 </button>
               </div>
             </motion.div>
