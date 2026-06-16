@@ -289,14 +289,18 @@ app.post("/api/send-email", inquiryLimiter, async (req, res) => {
         from: `"One Earth Limited" <${user}>`,
         to: user_email,
         subject: "We've received your inquiry - One Earth Limited",
-        text: `Thank you for reaching out!\n\nHi ${business_name},\nWe've received your inquiry. We aim to get back to you within 24 hours.\n\nBest regards,\nThe One Earth Team\n${calendarLinkText}`,
+        text: `Thank you for reaching out!\n\nHi ${business_name},\n\nWe've received your inquiry.\nYour phone number on file: ${phone || "N/A"}\n\nWe aim to get back to you within 24 hours.\n\n"Because we all share one planet — and every action counts."\n\nBest regards,\nThe One Earth Team\n${calendarLinkText}`,
         html: `
           <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e5e7eb; border-radius: 20px;">
             <h2 style="color: #2d3436; font-size: 24px;">Thank you for reaching out!</h2>
             <p style="font-size: 15px;">Hi ${business_name},</p>
             <p style="font-size: 15px; margin-bottom: 20px;">We've received your inquiry and our team is reviewing it.</p>
+            <p style="font-size: 15px; margin-bottom: 20px;">Your phone number on file: <strong>${phone || "N/A"}</strong></p>
             <p style="font-size: 15px; font-weight: bold; margin: 20px 0;">We aim to get back to you within 24 hours.</p>
             ${calendarLinkHtml}
+            <div style="margin: 30px 0; padding: 20px; background-color: #f9fafb; border-radius: 12px; border-left: 4px solid #788c78;">
+              <p style="margin: 0; font-style: italic; color: #4b5563; font-size: 14px;">"Because we all share one planet — and every action counts."</p>
+            </div>
             <p style="font-size: 15px; margin: 0;">Best regards,<br><strong>The One Earth Team</strong></p>
           </div>
         `,
