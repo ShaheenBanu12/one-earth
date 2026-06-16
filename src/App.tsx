@@ -649,17 +649,6 @@ function SuccessModal({
                 📅 {bookedSlot.date} at {bookedSlot.time} (BST)
               </p>
             </div>
-            
-            {getGoogleCalendarUrl(bookedSlot.date, bookedSlot.time, bookedSlot.service) && (
-              <a
-                href={getGoogleCalendarUrl(bookedSlot.date, bookedSlot.time, bookedSlot.service)!}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full inline-flex items-center justify-center gap-2 bg-[#34a853] hover:bg-[#2d8e47] text-white py-4 px-6 rounded-2xl font-bold text-xs uppercase tracking-wider transition-all shadow-md shadow-brand-sage/10"
-              >
-                <span>📅 Add to Google Calendar</span>
-              </a>
-            )}
           </div>
         )}
 
@@ -710,33 +699,6 @@ export default function App() {
     service: string;
   } | null>(null);
 
-  // SMTP diagnostics states
-  const [smtpDiagnosticsActive, setSmtpDiagnosticsActive] = useState(false);
-  const [smtpDiagnosticsLoading, setSmtpDiagnosticsLoading] = useState(false);
-  const [smtpDiagnosticsResult, setSmtpDiagnosticsResult] = useState<{
-    success: boolean;
-    message?: string;
-    error?: string;
-    code?: string;
-    command?: string;
-    config?: { host?: string; port?: number; user?: string; hasPassword?: boolean };
-  } | null>(null);
-
-  const runSMTPDiagnostics = async () => {
-    setSmtpDiagnosticsLoading(true);
-    try {
-      const res = await fetch("/api/test-email-config");
-      const data = await res.json();
-      setSmtpDiagnosticsResult(data);
-    } catch (err: any) {
-      setSmtpDiagnosticsResult({
-        success: false,
-        error: "Failed to communicate with SMTP diagnostics service."
-      });
-    } finally {
-      setSmtpDiagnosticsLoading(false);
-    }
-  };
   
   const handleToggleAdminMode = () => {
     const active = localStorage.getItem("oneearth_admin_active") === "true";
@@ -1172,7 +1134,7 @@ export default function App() {
             >
               {[
                 { id: "1", title: "Carbon Footprint", icon: BarChart3, desc: "Scopes 1-3 report using official DESNZ factors." },
-                { id: "2", title: "ESG Questionnaire", icon: FileText, desc: "ESG Questionnaire (Lite) to assess your broader impact." },
+                { id: "2", title: "ESG Snapshot", icon: FileText, desc: "ESG Snapshot (Lite) to assess your broader impact." },
                 { id: "3", title: "2 Hour Consultation", icon: Clock, desc: "Direct consultation time to guide your strategy." },
                 { id: "4", title: "12-Month Action Plan", icon: Calendar, desc: "Guided roadmap for practical sustainability steps." },
                 { id: "5", title: "Follow-Up Support", icon: CheckCircle2, desc: "Optional follow-up to ensure continued progress." }
@@ -1444,82 +1406,7 @@ export default function App() {
                       </div>
                   </form>
 
-                  {/* SMTP Diagnostic tool */}
-                  <div className="mt-6 border-t border-brand-border/40 pt-6">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setSmtpDiagnosticsActive(prev => !prev);
-                        if (!smtpDiagnosticsActive) {
-                          runSMTPDiagnostics();
-                        }
-                      }}
-                      className="text-xs font-semibold text-brand-sage hover:text-brand-sage/85 transition-colors flex items-center gap-1.5 mx-auto opacity-70 hover:opacity-100"
-                    >
-                      <Settings className="w-3.5 h-3.5" />
-                      {smtpDiagnosticsActive ? "Hide Mail Diagnostic Tool" : "Run Mail Delivery Diagnostic Test"}
-                    </button>
 
-                    {smtpDiagnosticsActive && (
-                      <div className="mt-4 p-4 bg-brand-soft/20 rounded-xl border border-brand-border/40 text-left text-xs max-w-sm mx-auto duration-200">
-                        <h4 className="font-bold uppercase tracking-wider mb-2 text-[10px] text-brand-primary opacity-80">SMTP Server Diagnostics</h4>
-                        
-                        {smtpDiagnosticsLoading ? (
-                          <div className="flex items-center gap-2 text-xs py-2 text-brand-sage font-medium">
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            <span>Verifying credentials and making handshake...</span>
-                          </div>
-                        ) : smtpDiagnosticsResult ? (
-                          <div className="space-y-2">
-                            {smtpDiagnosticsResult.success ? (
-                              <div className="p-3 bg-emerald-500/10 text-emerald-300 rounded-lg border border-emerald-500/20 text-xs">
-                                <p className="font-bold flex items-center gap-1">✅ SMTP Connection Verified</p>
-                                <p className="mt-1 opacity-90 text-[11px] leading-relaxed">{smtpDiagnosticsResult.message}</p>
-                              </div>
-                            ) : (
-                              <div className="p-3 bg-rose-500/10 text-rose-300 rounded-lg border border-rose-500/20 space-y-2 text-xs">
-                                <p className="font-bold flex items-center gap-1">❌ Connection Refused / Invalid</p>
-                                <p className="opacity-95 text-[11px] leading-relaxed">
-                                  <strong>Error Reason:</strong> {smtpDiagnosticsResult.error}
-                                </p>
-                                <div className="text-[10px] bg-black/25 p-2 rounded font-mono space-y-0.5 opacity-90 text-rose-200">
-                                  {smtpDiagnosticsResult.code && <p>Code: {smtpDiagnosticsResult.code}</p>}
-                                  {smtpDiagnosticsResult.command && <p>Command: {smtpDiagnosticsResult.command}</p>}
-                                </div>
-                                <div className="text-[11px] text-brand-primary/90 space-y-1.5 leading-normal bg-brand-soft/20 p-2.5 rounded-lg border border-brand-border/40 mt-2">
-                                  <p className="font-bold text-amber-300">💡 Why is this happening and how to fix:</p>
-                                  <p className="opacity-80">This <strong>timeout</strong> usually means the hosting cloud sandbox is firewalled or Namecheap's server is blocklisting cloud IP addresses to prevent spam.</p>
-                                  <div className="space-y-1 font-sans text-[10px] pl-2 border-l border-brand-sage mt-1 opacity-90">
-                                    <p><strong>1. Try Port 465 (SSL):</strong> Change <code>SMTP_PORT</code> in App Settings to <code>465</code>. Port 465 is secure & encrypted from start, often bypassing STARTTLS filters.</p>
-                                    <p><strong>2. Use Gmail:</strong> Use <code>smtp.gmail.com</code> (Port 465 or 587) with your Gmail account and a Google <em>App Password</em> (created in Google Account security settings).</p>
-                                    <p><strong>3. Use Brevo / Mailjet (Recommended):</strong> Free transactional email APIs (like Brevo, Mailjet, SendGrid) are designed specifically for Cloud Apps. Since they have excellent IP reputations, they are never blocked by firewalls.</p>
-                                  </div>
-                                </div>
-                              </div>
-                            )}
-
-                            <div className="p-2.5 bg-black/10 rounded-lg text-[10px] space-y-1 font-mono text-brand-primary/80">
-                              <p className="font-sans font-bold uppercase tracking-wider text-[8px] opacity-60">System Configuration:</p>
-                              <p>• Host: {smtpDiagnosticsResult.config?.host || "mail.privateemail.com"}</p>
-                              <p>• Port: {smtpDiagnosticsResult.config?.port || 587}</p>
-                              <p>• User: {smtpDiagnosticsResult.config?.user || "Not configured"}</p>
-                              <p>• Password: {smtpDiagnosticsResult.config?.hasPassword ? "🔒 Configured" : "⚠️ Empty / Missing"}</p>
-                            </div>
-
-                            <button
-                              type="button"
-                              onClick={runSMTPDiagnostics}
-                              className="mt-1 text-[10px] font-bold uppercase tracking-wider text-brand-sage hover:underline flex items-center gap-1"
-                            >
-                              🔄 Re-run Connection Test
-                            </button>
-                          </div>
-                        ) : (
-                          <p className="text-[11px] opacity-60">No diagnostic reports downloaded.</p>
-                        )}
-                      </div>
-                    )}
-                  </div>
                 </div>
 
                 {/* Bottom Contact Info */}
