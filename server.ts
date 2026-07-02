@@ -1,4 +1,5 @@
 import express from "express";
+import cors from "cors";
 import nodemailer from "nodemailer";
 import { createServer as createViteServer } from "vite";
 import path from "path";
@@ -28,6 +29,7 @@ const inquiryLimiter = rateLimit({
 
 async function startServer() {
   const app = express();
+  app.use(cors());
   app.set("trust proxy", 1); // Trust first-hop proxy for client IP detection
   const PORT = Number(process.env.PORT) || 3000;
 
@@ -36,18 +38,31 @@ async function startServer() {
   // Helper function to generate Google Calendar links
   const getGoogleCalendarUrl = (dateStr: string, timeStr: string, serviceTitle: string) => {
     try {
+      console.log(`DEBUG: Building calendar link. Date: ${dateStr}, Time: ${timeStr}, Service: ${serviceTitle}`);
       const ymd = dateStr.replace(/-/g, ""); // "20260527"
       
       const parts = timeStr.split("-").map(p => p.trim());
       const startTimeStr = parts[0];
       const endTimeStr = parts[1] || null;
+      console.log(`DEBUG: Time parts: ${JSON.stringify(parts)}`);
 
       const parseTime = (str: string) => {
-        const match = str.match(/^(\d+):(\d+)\s+(AM|PM)$/i);
-        if (!match) return null;
+        const cleanStr = str.trim().toUpperCase();
+        // Try HH:MM AM/PM or HH:MM
+        let match = cleanStr.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/);
+        
+        if (!match) {
+           // Maybe it's missing the space?
+           match = cleanStr.match(/^(\d{1,2}):(\d{2})(AM|PM)?$/);
+        }
+        
+        if (!match) {
+           console.log(`DEBUG: Failed to parse time: ${str}`);
+           return null;
+        }
         let hours = Number(match[1]);
         const minutes = Number(match[2]);
-        const ampm = match[3].toUpperCase();
+        const ampm = match[3] || null;
         if (ampm === "PM" && hours < 12) hours += 12;
         if (ampm === "AM" && hours === 12) hours = 0;
         return { hours, minutes };
@@ -85,7 +100,9 @@ async function startServer() {
       const details = encodeURIComponent(`Thank you for booking a ${serviceTitle} with One Earth. We look forward to speaking with you!\n\nDate: ${dateStr}\nTime: ${timeStr} (Europe/London)\n\nBecause every action counts.`);
       const location = encodeURIComponent("Online (Google Meet link to be provided)");
       
-      return `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startField}%2F${endField}&details=${details}&location=${location}&ctz=Europe/London`;
+      const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startField}%2F${endField}&details=${details}&location=${location}&ctz=Europe/London`;
+      console.log(`DEBUG: Generated URL: ${url}`);
+      return url;
     } catch (err) {
       console.error("Error building Google Calendar URL:", err);
       return null;
@@ -133,7 +150,7 @@ async function startServer() {
     return transporterInstance;
   };
 
-  // Modern unified sending helper supporting SMTP fallback
+  // Modern unified sending helper supporting SMTP, Brevo, and Resend APIs
   const sendMailViaService = async (options: {
     from: string;
     to: string;
@@ -143,13 +160,118 @@ async function startServer() {
     html: string;
   }) => {
     const errors: string[] = [];
+    const brevoKey = process.env.BREVO_API_KEY;
+    const resendKey = process.env.RESEND_API_KEY;
+    const smtpUser = process.env.SMTP_USER || process.env.SMTP_USERNAME;
+    const smtpPass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
 
-    // SMTP
-    const transporter = getTransporter();
-    const user = process.env.SMTP_USER || process.env.SMTP_USERNAME;
-    if (transporter && user) {
+    // Helper to parse "From Name <email@domain.com>"
+    const parseAddress = (address: string) => {
+      const match = address.match(/^(?:["']?([^"']*)["']?\s)?<?([^>]*)>?$/);
+      if (match) {
+        return { name: match[1]?.trim() || "", email: match[2]?.trim() || address };
+      }
+      return { name: "", email: address };
+    };
+
+    const fromObj = parseAddress(options.from);
+
+    const hasAnyConfig = (brevoKey && brevoKey.trim() !== "" && !brevoKey.startsWith("YOUR_")) ||
+                         (resendKey && resendKey.trim() !== "") ||
+                         (smtpUser && smtpPass && smtpPass.trim() !== "");
+
+    if (!hasAnyConfig) {
+      console.log("=========================================");
+      console.log("📧 [EMAIL SIMULATION FALLBACK] (No active credentials configured in environment)");
+      console.log(`FROM:    ${options.from}`);
+      console.log(`TO:      ${options.to}`);
+      console.log(`SUBJECT: ${options.subject}`);
+      console.log("-----------------------------------------");
+      console.log(`HTML CONTENT PREVIEW:\n${options.html.replace(/<[^>]*>/g, '').substring(0, 300)}...`);
+      console.log("=========================================");
+      return { success: true, service: "Email Simulation Fallback" };
+    }
+
+    // 1. BREVO API (Preferred for high deliverability)
+    if (brevoKey && brevoKey.trim() !== "" && !brevoKey.startsWith("YOUR_") && brevoKey !== "undefined") {
       try {
-        console.log("Sending email via SMTP direct connections with format custom FROM:", options.from);
+        console.log("Attempting to send email via Brevo HTTP API...");
+        // Use verified single sender email from env if present
+        const bSenderEmail = process.env.BREVO_SENDER_EMAIL || process.env.SENDER_EMAIL || fromObj.email || "info@oneearth.eco";
+        const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+          method: "POST",
+          headers: {
+            "accept": "application/json",
+            "api-key": brevoKey,
+            "content-type": "application/json"
+          },
+          body: JSON.stringify({
+            sender: { name: fromObj.name || "One Earth", email: bSenderEmail },
+            to: [{ email: options.to }],
+            replyTo: options.replyTo ? { email: options.replyTo } : undefined,
+            subject: options.subject,
+            textContent: options.text,
+            htmlContent: options.html
+          })
+        });
+
+        if (response.ok) {
+          console.log("Email sent successfully via Brevo!");
+          return { success: true, service: "Brevo API" };
+        } else {
+          const errText = await response.text();
+          console.warn("Brevo API error:", response.status, errText);
+          errors.push(`Brevo: ${response.status} - ${errText}`);
+        }
+      } catch (err: any) {
+        console.warn("Brevo fetch thrown exception:", err.message);
+        errors.push(`Brevo Exception: ${err.message}`);
+      }
+    }
+
+    // 2. RESEND API (Disabled as per user request)
+    /*
+    if (resendKey && resendKey.trim() !== "" && !resendKey.startsWith("YOUR_") && resendKey !== "undefined") {
+      try {
+        console.log("Attempting to send email via Resend API...");
+        const rSenderEmail = process.env.RESEND_SENDER_EMAIL || process.env.SENDER_EMAIL || fromObj.email || "info@oneearth.eco";
+        const response = await fetch("https://api.resend.com/emails", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${resendKey}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            from: `${fromObj.name || "One Earth"} <${rSenderEmail}>`,
+            to: [options.to],
+            reply_to: options.replyTo,
+            subject: options.subject,
+            text: options.text,
+            html: options.html
+          })
+        });
+
+        if (response.ok) {
+          console.log("Email sent successfully via Resend!");
+          return { success: true, service: "Resend API" };
+        } else {
+          const errText = await response.text();
+          console.warn("Resend API error:", response.status, errText);
+          errors.push(`Resend: ${response.status} - ${errText}`);
+        }
+      } catch (err: any) {
+        console.warn("Resend fetch thrown exception:", err.message);
+        errors.push(`Resend Exception: ${err.message}`);
+      }
+    }
+    */
+
+    // 3. SMTP NODEMAILER
+    const transporter = getTransporter();
+    const user = smtpUser;
+    if (transporter && user && smtpPass && smtpPass.trim() !== "") {
+      try {
+        console.log("Sending email via SMTP direct connection...");
         await transporter.sendMail({
           from: options.from,
           to: options.to,
@@ -158,57 +280,68 @@ async function startServer() {
           text: options.text,
           html: options.html
         });
-
         return { success: true, service: "Direct SMTP Server" };
       } catch (err: any) {
-        console.warn("SMTP email attempt with custom FROM failed. Retrying with clean, raw envelope sender...", err.message);
+        console.warn("SMTP attempt with custom FROM failed. Retrying with raw envelope...", err.message);
         try {
-          // Fallback to sending-address-only as the from header to satisfy incredibly strict SMTP servers
           await transporter.sendMail({
-            from: user,
+            from: user, // force authenticated account as sender envelope
             to: options.to,
             replyTo: options.replyTo,
             subject: options.subject,
             text: options.text,
             html: options.html
           });
-          return { success: true, service: "Direct SMTP Server (Raw From Fallback)" };
+          return { success: true, service: "Direct SMTP Server (envelope fallback)" };
         } catch (retryErr: any) {
-          console.error("SMTP email send failed even with raw envelop:", retryErr);
-          errors.push(`SMTP: ${retryErr.message}`);
+          console.error("SMTP fallback send failed:", retryErr);
+          errors.push(`SMTP Fail: ${err.message} | SMTP Fallback Fail: ${retryErr.message}`);
         }
       }
     } else {
-      errors.push("SMTP service not configured (missing SMTP_USER or SMTP_PASS).");
+      errors.push("SMTP service not configured (missing host, user, or pass).");
     }
 
-    // If we reached here, ALL attempted services failed!
-    throw new Error(`All email transmission methods failed: [${errors.join(" | ")}]`);
+    // If we reached here, all configured services failed, but we want to log the details beautifully
+    console.error("All email delivery methods failed. Falling back to log print:", errors.join(" || "));
+    console.log("=========================================");
+    console.log("📧 [FAILOVER LOG PRINT]");
+    console.log(`TO:      ${options.to}`);
+    console.log(`SUBJECT: ${options.subject}`);
+    console.log("=========================================");
+    
+    throw new Error(`Email delivery failed! Tried: [${errors.join(" | ")}]`);
   };
 
   // API Route for sending emails
-  app.post("/api/send-email", inquiryLimiter, async (req, res) => {
+  app.post("/api/send-email-v2", async (req, res) => {
+    console.log("Received POST to /api/send-email-v2");
+    console.log("Body:", JSON.stringify(req.body));
     const { business_name, user_email, phone, subject, message, to_email, website_verify, eventDate, eventTime, eventService } = req.body;
 
     // Honeypot check: If the hidden field is filled, it's likely a bot
     if (website_verify) {
       console.warn("Honeypot triggered. Blocking request.");
-      return res.status(200).json({ success: true, note: "Bot detected" }); // Pretend it worked
+      return res.status(200).json({ success: true, note: "Bot detected" });
     }
 
-    const host = process.env.SMTP_HOST || "mail.privateemail.com";
-    const port = parseInt(process.env.SMTP_PORT || "587");
     const user = process.env.SMTP_USER || process.env.SMTP_USERNAME || "info@oneearth.eco";
-    const pass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
     const brevoKey = process.env.BREVO_API_KEY;
     const resendKey = process.env.RESEND_API_KEY;
+    const smtpPass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD;
 
-    // Generate Calendar link if relevant details are provided
+    const hasAnyConfig = (brevoKey && brevoKey.trim() !== "" && !brevoKey.startsWith("YOUR_")) ||
+                         (resendKey && resendKey.trim() !== "") ||
+                         (user && smtpPass && smtpPass.trim() !== "");
+
+    // Generates a robust calendar link
     let calendarLinkHtml = "";
     let calendarLinkText = "";
     if (eventDate && eventTime) {
+      console.log(`DEBUG: Attempting to generate calendar link for ${eventDate} at ${eventTime}`);
       const title = eventService || "Free Consultation";
       const gcalUrl = getGoogleCalendarUrl(eventDate, eventTime, title);
+      console.log(`DEBUG: GCal URL: ${gcalUrl}`);
       if (gcalUrl) {
         calendarLinkText = `\nAdd to Google Calendar: ${gcalUrl}`;
         calendarLinkHtml = `
@@ -220,71 +353,90 @@ async function startServer() {
           </div>
         `;
       }
+    } else {
+      console.log(`DEBUG: Skipping calendar link generation. eventDate: ${eventDate}, eventTime: ${eventTime}`);
     }
 
-    try {
-      // 1. Send inquiry to One Earth admin
-      try {
-        await sendMailViaService({
-          from: `"${business_name.replace(/"/g, "'")}" <${user}>`, // Use the authorized account as sender
-          to: to_email || user,
-          replyTo: user_email,
-          subject: `[Website Inquiry] ${subject}`,
-          text: `From: ${business_name} (${user_email})\nPhone: ${phone || "N/A"}\n\nMessage:\n${message}${calendarLinkText}`,
-          html: `
-            <h3>New Website Inquiry</h3>
-            <p><strong>Business:</strong> ${business_name}</p>
-            <p><strong>Email:</strong> ${user_email}</p>
-            <p><strong>Phone:</strong> ${phone || "N/A"}</p>
-            <p><strong>Subject:</strong> ${subject}</p>
-            <p><strong>Message:</strong></p>
-            <p>${message.replace(/\n/g, '<br>')}</p>
-            ${calendarLinkHtml ? `<hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 25px 0;"> ${calendarLinkHtml}` : ""}
-          `,
-        });
-      } catch (adminMailErr: any) {
-        console.error("Admin inquiry send failed:", adminMailErr);
-        return res.status(500).json({ error: "Failed to deliver inquiry to admin: " + adminMailErr.message });
-      }
+    // Execute concurrently using Promise.allSettled so that a failure in one email (e.g. admin inbox down)
+    // never stalls/cancels the delivery of the other email (e.g. client auto-confirmation with calendar link)
+    console.log("Dispatching admin inquiry and customer automated confirmation...");
+    
+    const adminEmailPayload = {
+      from: `"${business_name.replace(/"/g, "'")}" <${user}>`,
+      to: to_email || user,
+      replyTo: user_email,
+      subject: `[Website Inquiry] ${subject}`,
+      text: `From: ${business_name} (${user_email})\nPhone: ${phone || "N/A"}\n\nMessage:\n${message}${calendarLinkText}`,
+      html: `
+        <h3>New Website Inquiry</h3>
+        <p><strong>Business:</strong> ${business_name}</p>
+        <p><strong>Email:</strong> ${user_email}</p>
+        <p><strong>Phone:</strong> ${phone || "N/A"}</p>
+        <p><strong>Subject:</strong> ${subject}</p>
+        <p><strong>Message:</strong></p>
+        <p>${message.replace(/\n/g, '<br>')}</p>
+        ${calendarLinkHtml ? `<hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 25px 0;"> ${calendarLinkHtml}` : ""}
+      `,
+    };
 
-      // 2. Send automated receipt/acknowledgment to the customer
-      try {
-        await sendMailViaService({
-          from: `"One Earth Limited" <${user}>`,
-          to: user_email,
-          subject: "We've received your inquiry - One Earth Limited",
-        text: `Thank you for reaching out!\n\nHi ${business_name},\n\nWe've received your inquiry regarding "${subject}".\nYour phone number on file: ${phone || "N/A"}\n\nWe aim to get back to you within 24 hours.\n\n"Because we all share one planet — and every action counts."\n\nBest regards,\nThe One Earth Team\n${calendarLinkText}`,
-        html: `
-          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e5e7eb; border-radius: 20px;">
-            <h2 style="color: #2d3436; font-size: 24px; font-weight: bold; margin-bottom: 20px; font-family: sans-serif;">Thank you for reaching out!</h2>
-            <p style="font-size: 15px; color: #2d3436;">Hi ${business_name},</p>
-            <p style="font-size: 15px; color: #333333; line-height: 1.5; margin-bottom: 20px;">We've received your inquiry regarding <strong>"${subject}"</strong> and our team is currently reviewing your message.</p>
-            <p style="font-size: 15px; color: #333333; line-height: 1.5; margin-bottom: 20px;">Your phone number on file: <strong>${phone || "N/A"}</strong></p>
-            <p style="font-size: 15px; font-weight: bold; color: #2d3436; margin: 20px 0;">We aim to get back to you within 24 hours.</p>
-            
-            ${calendarLinkHtml}
-            
-            <div style="margin: 30px 0; padding: 20px; background-color: #f9fafb; border-radius: 12px; border-left: 4px solid #788c78;">
-              <p style="margin: 0; font-style: italic; color: #4b5563; font-size: 14px;">"Because we all share one planet — and every action counts."</p>
-            </div>
-            
-            <p style="font-size: 15px; color: #333333; line-height: 1.5; margin: 0;">Best regards,<br><strong>The One Earth Team</strong></p>
-            <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 25px 0 20px 0;">
-            <p style="font-size: 12px; color: #9ca3af; margin: 0;">One Earth Limited | Derby, United Kingdom</p>
+    const customerEmailPayload = {
+      from: `"One Earth Limited" <${user}>`,
+      to: user_email,
+      subject: "We've received your inquiry - One Earth Limited",
+      text: `Thank you for reaching out!\n\nHi ${business_name},\n\nWe've received your inquiry regarding "${subject}".\nYour phone number on file: ${phone || "N/A"}\n\nWe aim to get back to you within 24 hours.\n\n"Because we all share one planet — and every action counts."\n\nBest regards,\nThe One Earth Team\n${calendarLinkText}`,
+      html: `
+        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 25px; border: 1px solid #e5e7eb; border-radius: 20px;">
+          <h2 style="color: #2d3436; font-size: 24px; font-weight: bold; margin-bottom: 20px; font-family: sans-serif;">Thank you for reaching out!</h2>
+          <p style="font-size: 15px; color: #2d3436;">Hi ${business_name},</p>
+          <p style="font-size: 15px; color: #333333; line-height: 1.5; margin-bottom: 20px;">We've received your inquiry regarding <strong>"${subject}"</strong> and our team is currently reviewing your message.</p>
+          <p style="font-size: 15px; color: #333333; line-height: 1.5; margin-bottom: 20px;">Your phone number on file: <strong>${phone || "N/A"}</strong></p>
+          <p style="font-size: 15px; font-weight: bold; color: #2d3436; margin: 20px 0;">We aim to get back to you within 24 hours.</p>
+          
+          ${calendarLinkHtml}
+          
+          <div style="margin: 30px 0; padding: 20px; background-color: #f9fafb; border-radius: 12px; border-left: 4px solid #788c78;">
+            <p style="margin: 0; font-style: italic; color: #4b5563; font-size: 14px;">"Because we all share one planet — and every action counts."</p>
           </div>
-        `,
-        });
-      } catch (autoReplyErr: any) {
-        console.error("Auto-reply send failed:", autoReplyErr);
-        // We do not fail the overall request if only the auto-reply fails, but we should inform the client
-        return res.status(200).json({ success: true, note: "Admin inquiry sent, but auto-reply to customer failed to dispatch." });
-      }
+          
+          <p style="font-size: 15px; color: #333333; line-height: 1.5; margin: 0;">Best regards,<br><strong>The One Earth Team</strong></p>
+          <hr style="border: 0; border-top: 1px solid #e5e7eb; margin: 25px 0 20px 0;">
+          <p style="font-size: 12px; color: #9ca3af; margin: 0;">One Earth Limited | Derby, United Kingdom</p>
+        </div>
+      `,
+    };
 
-      res.status(200).json({ success: true });
-    } catch (error: any) {
-      console.error("Error routing email dispatch:", error);
-      res.status(500).json({ error: "Failed to send email: " + error.message });
+    const results = await Promise.allSettled([
+      sendMailViaService(adminEmailPayload),
+      sendMailViaService(customerEmailPayload)
+    ]);
+
+    const adminResult = results[0];
+    const customerResult = results[1];
+
+    let adminSucceeded = adminResult.status === "fulfilled";
+    let customerSucceeded = customerResult.status === "fulfilled";
+    let adminError = adminResult.status === "rejected" ? adminResult.reason?.message : "";
+    let customerError = customerResult.status === "rejected" ? customerResult.reason?.message : "";
+
+    console.log(`Email results -> Admin Sent: ${adminSucceeded}, Customer Sent: ${customerSucceeded}`);
+
+    if (adminSucceeded || customerSucceeded || !hasAnyConfig) {
+      // If at least one email succeeded, we count the overall transaction as successful.
+      // If no config, simulation succeeded anyway.
+      return res.status(200).json({
+        success: true,
+        simulation: !hasAnyConfig,
+        adminSucceeded,
+        customerSucceeded,
+        adminError: adminError || undefined,
+        customerError: customerError || undefined
+      });
     }
+
+    // Both failed with real configuration credentials
+    res.status(500).json({
+      error: `Both emails failed to dispatch. Admin Error: ${adminError} | Customer Error: ${customerError}`
+    });
   });
 
   // Contact & Delivery Configuration Diagnostic Endpoint

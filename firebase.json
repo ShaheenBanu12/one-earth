@@ -1,10 +1,6 @@
 {
   "hosting": {
-    "public": "dist",
-    "predeploy": [
-      "npm install",
-      "npm run build"
-    ],
+    "source": ".",
     "ignore": [
       "firebase.json",
       "**/.*",
@@ -12,9 +8,17 @@
     ],
     "rewrites": [
       {
+        "source": "/api/**",
+        "function": "api"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
     ]
+  },
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs20"
   }
 }

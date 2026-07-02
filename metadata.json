@@ -2,5 +2,7 @@
   "name": "One Earth Limited",
   "description": "Simple, affordable sustainability support for UK SMEs. Helping businesses understand their environmental impact and take practical steps toward sustainability.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }

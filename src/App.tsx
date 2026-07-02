@@ -526,7 +526,7 @@ function ModernBookingSystem({
           <div className="mt-auto pt-8 border-t border-brand-border flex items-center justify-between gap-4">
             <div className="flex items-center gap-4 opacity-30 grayscale ml-auto">
               <Globe className="w-3 h-3" />
-              <span className="text-[9px] font-bold uppercase tracking-widest">Timezone: BST</span>
+              <span className="text-[9px] font-bold uppercase tracking-widest">Timezone: UK Time (GMT/BST)</span>
             </div>
           </div>
         </div>
@@ -561,11 +561,11 @@ const getGoogleCalendarUrl = (dateStr: string, timeStr: string, serviceTitle: st
     const endTimeStr = parts[1] || null;
 
     const parseTime = (str: string) => {
-      const match = str.match(/^(\d+):(\d+)\s*(AM|PM)$/i);
+      const match = str.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
       if (!match) return null;
       let hours = Number(match[1]);
       const minutes = Number(match[2]);
-      const ampm = match[3].toUpperCase();
+      const ampm = match[3] ? match[3].toUpperCase() : null;
       if (ampm === "PM" && hours < 12) hours += 12;
       if (ampm === "AM" && hours === 12) hours = 0;
       return { hours, minutes };
@@ -627,7 +627,7 @@ function SuccessModal({
         initial={{ opacity: 0, scale: 0.95, y: 20 }}
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
-        className="relative bg-white rounded-[40px] p-10 md:p-14 w-full max-w-xl shadow-2xl text-center space-y-8"
+         className="relative bg-white rounded-[40px] p-10 md:p-14 w-full max-w-xl shadow-2xl text-center space-y-8"
       >
         <div className="w-20 h-20 rounded-full bg-brand-sage text-white flex items-center justify-center mx-auto shadow-xl shadow-brand-sage/20">
           <CheckCircle2 className="w-10 h-10" />
@@ -646,9 +646,10 @@ function SuccessModal({
             <div className="space-y-1">
               <p className="text-base font-bold text-brand-primary">{bookedSlot.service}</p>
               <p className="text-xs font-semibold text-brand-primary/70">
-                📅 {bookedSlot.date} at {bookedSlot.time} (BST)
+                📅 {bookedSlot.date} at {bookedSlot.time} (UK Time)
               </p>
             </div>
+
           </div>
         )}
 
@@ -883,9 +884,9 @@ export default function App() {
         });
       }
 
-      // 3. Send Email Notification (Non-blocking or at least we catch errors)
+      // 3. Send Email Notification
       try {
-        const emailRes = await fetch("/api/send-email", {
+        const emailRes = await fetch("/api/send-email-v2", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
@@ -905,15 +906,28 @@ export default function App() {
         });
         
         if (!emailRes.ok) {
-          const errorData = await emailRes.json();
-          console.warn("Email service error:", errorData.error);
-          // We don't throw here so the user still sees the "Success" for the booking itself
+          let errorData;
+          try {
+            errorData = await emailRes.json();
+          } catch {
+            errorData = { error: `Server returned ${emailRes.status} ${emailRes.statusText}` };
+          }
+          console.error("Email service error:", errorData.error);
+          setErrorMessage(errorData.error || "Failed to send email. Please ensure mail services are configured.");
+          setSubmitStatus("error");
+          setIsSubmitting(false);
+          return; // Stop execution on email error so "success" isn't shown
         }
-      } catch (emailErr) {
+      } catch (emailErr: any) {
         console.error("Email fetch failed:", emailErr);
+        setErrorMessage(emailErr.message || "Failed to contact email service.");
+        setSubmitStatus("error");
+        setIsSubmitting(false);
+        return;
       }
       
       setSubmitStatus("success");
+      setErrorMessage(null);
       setFormData({ businessName: "", email: "", phone: "", subject: "Starter Pack Inquiry", message: "", website_verify: "" });
       
     } catch (error: any) {
@@ -1002,7 +1016,7 @@ export default function App() {
                 {navLinks.map((link) => (
                   <a 
                     key={link.href} 
-                    href={link.href} 
+                    href={link.href}
                     onClick={() => setIsMobileMenuOpen(false)}
                     className="text-brand-primary/60 hover:text-brand-sage transition-colors"
                   >
@@ -1069,7 +1083,7 @@ export default function App() {
         </section>
 
         {/* About Section */}
-        <section id="about" className="py-24 md:py-32 bg-white">
+        <section id="about" className="py-24 md:py-32 bg-white scroll-mt-20">
           <div className="max-w-7xl mx-auto px-6 md:px-12">
             <div className="grid lg:grid-cols-12 gap-16 md:gap-24 items-center">
               <div className="lg:col-span-12 flex flex-col items-center text-center mb-16">
@@ -1113,7 +1127,7 @@ export default function App() {
         </section>
 
         {/* Starter Pack Section */}
-        <section id="services" className="py-24 md:py-32 border-t border-brand-border bg-brand-bg">
+        <section id="services" className="py-24 md:py-32 border-t border-brand-border bg-brand-bg scroll-mt-20">
           <div className="max-w-7xl mx-auto px-6 md:px-12">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-20 gap-8">
               <div className="max-w-2xl">
@@ -1191,7 +1205,7 @@ export default function App() {
         </section>
 
         {/* Why Choose Us */}
-        <section id="why" className="py-24 md:py-32 bg-brand-bg relative overflow-hidden border-t border-brand-border">
+        <section id="why" className="py-24 md:py-32 bg-brand-bg relative overflow-hidden border-t border-brand-border scroll-mt-20">
           <div className="max-w-7xl mx-auto px-6 md:px-12">
             <div className="grid lg:grid-cols-2 gap-20 items-center">
               <div>
@@ -1232,7 +1246,7 @@ export default function App() {
         </section>
 
         {/* Contact & Booking Section */}
-        <section id="contact" className="py-24 md:py-32 bg-white border-t border-brand-border">
+        <section id="contact" className="py-24 md:py-32 bg-white border-t border-brand-border scroll-mt-20">
           <div className="max-w-5xl mx-auto px-6 md:px-12">
             <div className="text-center mb-20 space-y-6">
               <span className="text-brand-sage font-bold text-[10px] uppercase tracking-[0.3em] block">Connect</span>
@@ -1392,6 +1406,12 @@ export default function App() {
                     <div className="hidden" aria-hidden="true">
                       <input type="text" name="website_verify" value={formData.website_verify} onChange={(e) => setFormData({ ...formData, website_verify: e.target.value })} />
                     </div>
+
+                    {submitStatus === "error" && errorMessage && (
+                      <div className="text-red-500 bg-red-500/10 p-4 rounded-xl text-center text-xs font-bold w-full my-4">
+                        {errorMessage}
+                      </div>
+                    )}
                     
                       <div className="space-y-6 pt-4 w-full flex flex-col items-center">
                         <button 
